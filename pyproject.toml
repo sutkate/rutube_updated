@@ -1,0 +1,13 @@
+[project]
+name = "pythonproject4"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.10"
+dependencies = [
+    "aiofiles>=25.1.0",
+    "aiohttp>=3.13.2",
+    "patchright>=1.56.0",
+    "playwright-stealth>=2.0.0",
+    "pydantic-settings>=2.12.0",
+    "tqdm>=4.67.1",
+]
