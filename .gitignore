@@ -1,5 +1,8 @@
-.txt
-
+*.txt
+*.js
+*.json
 .venv
 logs
 profiles
+.idea
+*.xml
