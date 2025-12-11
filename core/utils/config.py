@@ -8,7 +8,9 @@ class Config(BaseSettings):
 
     PROXY_PATH: str = 'proxies.txt'
     VIDEO_PATH: str = 'videos.txt'
+
     CHROME_DIR: str = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
     PROFILES_DIR: str = 'profiles'
+
     HEADLESS: str = 'True'
 config = Config()

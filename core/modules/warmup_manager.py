@@ -28,14 +28,12 @@ class WarmupManager:
 
     async def _simulate_human_actions(self, page, worker_id: str):
         self.logger.info(f"[W{worker_id}] Simulating human-like actions...")
-
         actions = [
             self._random_scroll,
             self._random_click,
             self._random_hover,
             self._random_scroll  # Bias towards scrolling as it's common
         ]
-
         for _ in range(self.num_actions_per_site):
             action = random.choice(actions)
             try:
@@ -65,7 +63,6 @@ class WarmupManager:
         if elements:
             element = random.choice(elements[:20])  # Limit to avoid overload
             await element.hover()
-
 
     async def _rutube_banner(self, page, worker_id):
         self.logger.info(f"Starting rutube warmup for profile {worker_id}")
@@ -99,13 +96,11 @@ class WarmupManager:
             await debug_screenshot(page=page, dir=__name__, name=f'EXCEPTION_{page.url}')
             self.logger.warning(f'[{worker_id}] Error occurred while rutube warmup: {err}')
 
-
     async def warmup_profile(self, context: BrowserContext, profile_id: str) -> BrowserContext:
         self.logger.info(f"Starting extended warmup for profile {profile_id}")
         profile_path = os.path.join(self.profile_dir, profile_id)
         os.makedirs(profile_path, exist_ok=True)
         page = await context.new_page()
-
         try:
             # Visit multiple sites for extended warmup
             num_sites = random.randint(3, 5)  # More sites for longer warmup
@@ -120,7 +115,6 @@ class WarmupManager:
                 await asyncio.sleep(random.uniform(1, 3))
             await page.goto('rutube.ru')
             await self._rutube_banner(page, profile_id)
-
             self.logger.info(f"Warmup completed for profile {profile_id}. Cookies saved.")
 
         except Exception as e:

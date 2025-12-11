@@ -23,19 +23,23 @@ from core.utils.screenshot_logger import debug_screenshot
 class Rutube:
     def __init__(
             self,
-            profile_dir: str,
+            profile_dir: str = config.PROFILES_DIR,
             num_contexts_per_thread: int = config.CONTEXTS_PER_THREAD,
             num_threads: int = config.THREADS
     ):
         self.profile_dir = profile_dir
         self.logger = get_logger(__name__)
+
         self.num_contexts_per_thread = num_contexts_per_thread  # Контексты на поток
         self.num_threads = num_threads  # Количество потоков
+
         self.stop_event = threading.Event()  # Для graceful shutdown
         self.shutdown_initiated = False
         self.warmup_manager = WarmupManager(self.profile_dir)
+
         self.proxy_manager = ProxyManager()
         self.proxies = []  # Загружаем прокси при инициализации
+
         self.proxy_cycle = itertools.cycle(self.proxies) if self.proxies else None  # Создаем цикличный итератор
         self.profiles_dir = config.PROFILES_DIR
 
@@ -84,7 +88,12 @@ class Rutube:
         except (TargetClosedError, PlaywrightError, Exception) as err:
             self.logger.warning(f"Stealth init script failed or context closed: {err}")
 
-    async def _generate_context(self, playwright: Playwright, worker_id: int, context_id: int) -> BrowserContext:
+    async def _generate_context(
+            self,
+            playwright: Playwright,
+            worker_id: int,
+            context_id: int
+    ) -> BrowserContext:
         """
         Генерация контекста:
         - headless=False (чтобы не ломать декодеры и рендеринг)
@@ -97,10 +106,9 @@ class Rutube:
         profile_dir = os.path.join(self.profile_dir, f"thread_{worker_id}_context_{context_id}")
         os.makedirs(self.profile_dir, exist_ok=True)
 
-        # Собираем аргументы — избегаем опций, которые ломают плеер
         args = [
             f"--window-size={fp['viewport_width']},{fp['viewport_height']}",
-            "--disable-blink-features=AutomationControlled",  # мягкий stealth
+            "--disable-blink-features=AutomationControlled",
             "--disable-features=IsolateOrigins,site-per-process",
             f"--lang={fp['language']}",
             "--disable-dev-shm-usage",
@@ -110,7 +118,6 @@ class Rutube:
         proxy = next(self.proxy_cycle) if self.proxy_cycle else None
         self.logger.debug(proxy)
         try:
-            # Запускаем persistent context в видимом режиме (headful) — это критично для корректной работы медиадекодеров
             context = await playwright.chromium.launch_persistent_context(
                 user_data_dir=profile_dir,
                 executable_path=config.CHROME_DIR,
@@ -155,13 +162,12 @@ class Rutube:
 
             await debug_screenshot(page=page, dir=__name__, name=f"video_loaded_{worker_id}")
 
-            # Логирование
             # page.on("console", lambda msg: self.logger.debug(f"PAGE LOG: {msg.text}"))
             page.on("pageerror", lambda err: self.logger.error(f"PAGE ERROR: {err}"))
 
             duration_el = await page.query_selector(".time-block-module__duration___RQctT")
             duration: float = 120
-            # Случайный скроллинг с человеческими паузами
+
             for _ in range(random.randint(2, 5)):
                 try:
                     scroll_amount = random.randint(150, 900)
@@ -178,19 +184,17 @@ class Rutube:
             await debug_screenshot(page=page, dir=__name__, name=f"debug_{worker_id}")
             await asyncio.sleep(random.uniform(2, 4))  # Начальная пауза для старта
 
-
             try:
                 duration = float(await duration_el.text_content() if duration_el else None)
                 await debug_screenshot(page=page, dir=__name__, name=f"debug_{worker_id}")
             except Exception as e:
                 await debug_screenshot(page=page, dir=__name__, name=f"EXCEPTION_{worker_id}")
                 pass
-            watch_duration = random.uniform(duration * 0.5, duration)
+
+            watch_duration = random.uniform(duration * 0.2, duration * 0.4)
             await asyncio.sleep(watch_duration)
 
             summary_time = await page.query_selector(".time-block-module__currentTime___Fo3jS")
-
-
             if duration - summary_time > 20:
                 self.logger.info(f"[W{worker_id}] Video playback confirmed ({summary_time:.1f}s)")
                 return True
@@ -210,13 +214,11 @@ class Rutube:
             while not self.stop_event.is_set():
                 page = await context.new_page()
                 try:
-                    # Берём URL по кругу
                     video_url = self.video_list[video_index]
                     video_index = (video_index + 1) % len(self.video_list)
-                    # Основной просмотр
-                    await self._watch_video(page, video_url, f"{thread_id}-{context_id}")
-                    # Пауза перед следующим видео
-                    await asyncio.sleep(random.uniform(40, 160))
+                    await self._watch_video(page, video_url, f"T{thread_id}-C{context_id}")
+                    await page.goto('rutube.ru')
+                    await asyncio.sleep(random.uniform(4, 10))
                 except Exception as e:
                     self.logger.error(f"[T{thread_id}-C{context_id}] Error: {e}")
                 finally:
@@ -225,7 +227,6 @@ class Rutube:
                             await page.close()
                     except:
                         pass
-
         finally:
             try:
                 await context.close()
@@ -240,8 +241,7 @@ class Rutube:
             for context_id in range(self.num_contexts_per_thread):
                 task = asyncio.create_task(self._context_task(pw, thread_id, context_id))
                 context_tasks.append(task)
-                await asyncio.sleep(random.uniform(1, 3))  # Старт с задержкой для снижения всплесков
-
+                await asyncio.sleep(random.uniform(1, 8))  # Старт с задержкой для снижения всплесков
             await asyncio.gather(*context_tasks, return_exceptions=True)
 
     def _run_thread(self, thread_id: int):
