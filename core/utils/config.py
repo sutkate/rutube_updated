@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Config(BaseSettings):
@@ -10,7 +12,7 @@ class Config(BaseSettings):
     PROXY_PATH: str = 'proxies.txt'
     VIDEO_PATH: str = 'videos.txt'
 
-    CHROME_DIR: str = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
+    CHROME: str = "C:/Program Files/Google/Chrome/Application/chrome.exe"
     PROFILES_DIR: str = 'profiles'
 
     HEADLESS: str = 'True'

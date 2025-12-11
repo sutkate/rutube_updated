@@ -117,7 +117,7 @@ class Rutube:
         try:
             context = await playwright.chromium.launch_persistent_context(
                 user_data_dir=profile_dir,
-                executable_path=config.CHROME_DIR,
+                executable_path=str(config.CHROME),
                 headless=True if config.HEADLESS == 'True' else False,
                 viewport={"width": fp["viewport_width"], "height": fp["viewport_height"]},
                 user_agent=fp["user_agent"],
