@@ -174,18 +174,14 @@ class ProxyManager:
         failed_proxies = []
 
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            # Создаем задачи для всех прокси
             tasks = []
             for ip, port, user, password in proxy_list:
                 task = self._check_proxy_with_semaphore_and_info(
                     ip, port, user, password, session, semaphore
                 )
                 tasks.append(task)
-
-            # Запускаем все задачи параллельно и собираем результаты
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Обрабатываем результаты
         for result in results:
             if isinstance(result, Exception):
                 self.logger.debug(f"Исключение при проверке: {result}")

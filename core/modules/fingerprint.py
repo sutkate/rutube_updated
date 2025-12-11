@@ -4,12 +4,8 @@ from datetime import datetime, timezone
 try:
     from zoneinfo import ZoneInfo
 except Exception:
-    # fallback for very old pythons (unlikely); prefer Python 3.9+
     from backports.zoneinfo import ZoneInfo  # type: ignore
 
-# ----- вспомогательные данные -----
-
-# User-Agent'ы сгруппированы по платформам — это гарантирует согласованность:
 USER_AGENTS_BY_PLATFORM = {
     "Win64": [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -18,7 +14,6 @@ USER_AGENTS_BY_PLATFORM = {
         "Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     ],
     "Win32": [
-        # Rare for modern desktops, but keep for variety
         "Mozilla/5.0 (Windows NT 10.0; Win32; x86) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
     ],
     "MacIntel": [
@@ -186,7 +181,6 @@ def generate_fingerprint(seed: int | None = None) -> dict:
 
     locale, languages, timezone_name = _pick_locale_and_tz()
     tz_offset = _timezone_offset_minutes(timezone_name)
-
     hw_concurrency, device_memory = _pick_hardware_profile()
 
     fingerprint = {

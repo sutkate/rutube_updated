@@ -19,7 +19,6 @@ from core.utils.get_videos import get_videos
 from core.utils.logger import get_logger
 from core.utils.screenshot_logger import debug_screenshot
 
-
 class Rutube:
     def __init__(
             self,
@@ -29,7 +28,7 @@ class Rutube:
     ):
         self.profile_dir = profile_dir
         self.logger = get_logger(__name__)
-
+        self.count: int = 0
         self.num_contexts_per_thread = num_contexts_per_thread  # Контексты на поток
         self.num_threads = num_threads  # Количество потоков
 
@@ -77,14 +76,12 @@ class Rutube:
         Не ломает видеоплееры — только безопасные правки.
         """
         try:
-            # Подготовим значения, которые вставим в скрипт (экранируем JSON-представлением)
             language = fp.get('language', 'ru-RU')
             languages = fp.get('languages') or [language, 'en-US']
             platform = fp.get('platform', 'Win32')
 
             hwc_base = int(fp.get('hardware_concurrency', 4))
             hwc = max(1, hwc_base + random.choice([-1, 0, 1]))
-
         except (TargetClosedError, PlaywrightError, Exception) as err:
             self.logger.warning(f"Stealth init script failed or context closed: {err}")
 
@@ -150,8 +147,7 @@ class Rutube:
         """Просмотр видео с проверкой прогресса (адаптировано под прямой video-элемент Rutube)"""
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            self.logger.info(f"[W{worker_id}] 👤 Имитирую поведение пользователя...")
-
+            self.logger.debug(f"[W{worker_id}] 👤 Имитирую поведение пользователя...")
             await asyncio.sleep(1)
 
             for _ in range(3):
@@ -174,7 +170,6 @@ class Rutube:
                     await page.evaluate(f"window.scrollBy(0, {scroll_amount})")
                     await asyncio.sleep(random.uniform(0.8, 2.5))
                     await page.evaluate("window.scrollTo(0, 0)")
-
                     await asyncio.sleep(random.uniform(0.8, 2.5))
                     await page.get_by_role("button", name="Закрыть", exact=True).click()
 
@@ -182,24 +177,22 @@ class Rutube:
                     self.logger.debug(f"[W{worker_id}] {err}")
 
             await debug_screenshot(page=page, dir=__name__, name=f"debug_{worker_id}")
-            await asyncio.sleep(random.uniform(2, 4))  # Начальная пауза для старта
 
             try:
                 duration = float(await duration_el.text_content() if duration_el else None)
                 await debug_screenshot(page=page, dir=__name__, name=f"debug_{worker_id}")
             except Exception as e:
                 await debug_screenshot(page=page, dir=__name__, name=f"EXCEPTION_{worker_id}")
-                pass
 
             watch_duration = random.uniform(duration * 0.2, duration * 0.4)
             await asyncio.sleep(watch_duration)
 
             summary_time = await page.query_selector(".time-block-module__currentTime___Fo3jS")
             if duration - summary_time > 20:
-                self.logger.info(f"[W{worker_id}] Video playback confirmed ({summary_time:.1f}s)")
+                self.logger.debug(f"[W{worker_id}] Video playback confirmed ({summary_time:.1f}s)")
                 return True
             else:
-                self.logger.warning(
+                self.logger.debug(
                     f"[W{worker_id}] Video failed to play properly (progress: {summary_time:.1f}s)")
                 return False
         except (TargetClosedError, PlaywrightError):
@@ -216,9 +209,10 @@ class Rutube:
                 try:
                     video_url = self.video_list[video_index]
                     video_index = (video_index + 1) % len(self.video_list)
-                    await self._watch_video(page, video_url, f"T{thread_id}-C{context_id}")
+                    if await self._watch_video(page, video_url, f"T{thread_id}-C{context_id}"):
+                        self.count += 1
                     await page.goto('rutube.ru')
-                    await asyncio.sleep(random.uniform(4, 10))
+                    await asyncio.sleep(random.uniform(6, 14))
                 except Exception as e:
                     self.logger.error(f"[T{thread_id}-C{context_id}] Error: {e}")
                 finally:
@@ -236,13 +230,18 @@ class Rutube:
 
     async def _thread_main(self, thread_id: int):
         """Асинхронный main для потока: запускает несколько контекстов параллельно"""
-        async with Stealth().use_async(async_playwright()) as pw:
-            context_tasks = []
-            for context_id in range(self.num_contexts_per_thread):
-                task = asyncio.create_task(self._context_task(pw, thread_id, context_id))
-                context_tasks.append(task)
-                await asyncio.sleep(random.uniform(1, 8))  # Старт с задержкой для снижения всплесков
-            await asyncio.gather(*context_tasks, return_exceptions=True)
+        if config.PRO or not config.PRO:
+            async with Stealth().use_async(async_playwright()) as pw:
+                context_tasks = []
+                for context_id in range(self.num_contexts_per_thread):
+                    task = asyncio.create_task(self._context_task(pw, thread_id, context_id))
+                    context_tasks.append(task)
+                    await asyncio.sleep(random.uniform(1, 8))  # Старт с задержкой для снижения всплесков
+                await asyncio.gather(*context_tasks, return_exceptions=True)
+        # else:
+        #     async with Stealth().use_async(async_playwright()) as pw:
+        #         context_tasks = []
+        #         for context_id in range(self.num_contexts_per_thread):
 
     def _run_thread(self, thread_id: int):
         """Запуск async loop в потоке"""
@@ -254,7 +253,6 @@ class Rutube:
             self.logger.info(f"Thread {thread_id} received shutdown")
             self.stop_event.set()
             self.shutdown_initiated = True
-            # Cancel all tasks
             for task in asyncio.all_tasks(loop):
                 task.cancel()
             loop.run_until_complete(asyncio.gather(*asyncio.all_tasks(loop), return_exceptions=True))
@@ -266,7 +264,6 @@ class Rutube:
         """Запуск многопоточной системы"""
         self.proxies = asyncio.run(self.proxy_manager.get_proxies())
         self._clean_profile()
-
         def signal_handler(sig, frame):
             self.logger.info("Signal received, initiating shutdown")
             self.stop_event.set()
@@ -283,6 +280,5 @@ class Rutube:
             for thread_id in range(self.num_threads):
                 future = executor.submit(self._run_thread, thread_id)
                 futures.append(future)
-                time.sleep(random.uniform(2, 5))  # Задержка между запуском потоков для снижения всплесков
-            # Ждем завершения
+                time.sleep(random.uniform(2, 5))
             concurrent.futures.wait(futures, return_when=concurrent.futures.ALL_COMPLETED)
