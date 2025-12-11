@@ -52,7 +52,7 @@ class ProxyManager:
                     ssl=False
             ) as response:
                 text = await response.text()
-                self.logger.debug(f'{response.status} ==> {text}')
+                #self.logger.debug(f'{response.status} ==> {text}')
                 return response.status == 200
 
         except Exception as e:
@@ -157,7 +157,7 @@ class ProxyManager:
     async def _check_proxies_batch_with_failed(
             self,
             proxy_list: List[tuple],
-            max_concurrent: int = 20
+            max_concurrent: int = 40
     ) -> Tuple[List[Dict], List[Dict]]:
         """
         Параллельная проверка списка прокси с возвратом и рабочих, и нерабочих

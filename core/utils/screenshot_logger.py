@@ -13,7 +13,7 @@ logger = get_logger(logger_name='screenshot_debug')
 
 
 async def debug_screenshot(page, dir, name) -> None:
-    if config.DEBUG:
+    if config.DEBUG_SCREENSHOTS:
         if name.startswith(('http://', 'https://')):
             parsed = urlparse(name)
             safe_name = parsed.netloc.replace('.', '_')

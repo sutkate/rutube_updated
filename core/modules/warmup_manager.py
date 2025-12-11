@@ -2,13 +2,15 @@ import asyncio
 import random
 import os
 from patchright.async_api import BrowserContext
+
+from core.utils.config import config
 from core.utils.logger import get_logger
 from core.utils.screenshot_logger import debug_screenshot
 
 
 class WarmupManager:
-    def __init__(self, profile_dir: str, warmup_sites: list[str] = None, num_actions_per_site: int = 6,
-                 min_pause: float = 1.0, max_pause: float = 5.0):
+    def __init__(self, profile_dir: str, warmup_sites: list[str] = None, num_actions_per_site: int = 4,
+                 min_pause: float = config.PAUSES_ON_WARMUP * 0.5, max_pause: float = config.PAUSES_ON_WARMUP * 1.5):
         self.profile_dir = profile_dir
         self.logger = get_logger(__name__)
         self.warmup_sites = warmup_sites or [
@@ -23,7 +25,6 @@ class WarmupManager:
 
     async def _human_like_pause(self):
         """Simulates a human-like pause with random duration."""
-        self.logger.debug('human-like pause inited')
         await asyncio.sleep(random.uniform(self.min_pause, self.max_pause))
 
     async def _simulate_human_actions(self, page, worker_id: str):
@@ -42,7 +43,7 @@ class WarmupManager:
                 await debug_screenshot(page=page, dir=__name__, name=page.url)
             except Exception as e:
                 await debug_screenshot(page=page,dir=__name__,name=f'EXCEPTION_{page.url}')
-                self.logger.warning(f"[W{worker_id}] Action on page {page.url} failed: {e}")
+                self.logger.debug(f"[W{worker_id}] Action on page {page.url} failed: {e}")
 
     async def _random_scroll(self, page):
         scroll_amount = random.randint(200, 800)
@@ -103,12 +104,12 @@ class WarmupManager:
         page = await context.new_page()
         try:
             # Visit multiple sites for extended warmup
-            num_sites = random.randint(3, 5)  # More sites for longer warmup
+            num_sites = random.randint(config.WARMUP_MIN_SITES, config.WARMUP_MAX_SITES)  # More sites for longer warmup
             selected_sites = random.sample(self.warmup_sites, num_sites)
 
             for site in selected_sites:
                 self.logger.info(f"[Profile {profile_id}] Visiting {site}")
-                await page.goto(site, wait_until="domcontentloaded", timeout=60000)
+                await page.goto(site, wait_until="domcontentloaded", timeout=20000)
                 await debug_screenshot(page=page, dir=__name__, name=site)
                 await self._simulate_human_actions(page, profile_id)
 
