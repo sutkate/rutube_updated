@@ -7,10 +7,10 @@ class Config(BaseSettings):
 
 
 
-    DEBUG: bool = True
+    DEBUG: bool = False
     DEBUG_SCREENSHOTS: bool = False
-    THREADS: int = 2
-    CONTEXTS_PER_THREAD: int = 2
+    THREADS: int = 5
+    CONTEXTS_PER_THREAD: int = 5
 
     PROXY_PATH: str = 'proxies.txt'
     VIDEO_PATH: str = 'videos.txt'
@@ -20,13 +20,14 @@ class Config(BaseSettings):
 
     HEADLESS: str = 'True'
 
-    PRO: bool = True
+    PRO: bool = False
 
-    WARMUP_MAX_SITES: int = 4
-    WARMUP_MIN_SITES: int = 2
+    CONTEXT_LIFETIME: float = 10 * 60
+    WARMUP_MAX_SITES: int = 3
+    WARMUP_MIN_SITES: int = 1
     PAUSES_ON_WARMUP: float = 4.0
 
-    WATCH_DURATION_MIN: float = 0.05
-    WATCH_DURATION_MAX: float = 0.1
+    WATCH_DURATION_MIN: float = 4
+    WATCH_DURATION_MAX: float = 15
 
 config = Config()

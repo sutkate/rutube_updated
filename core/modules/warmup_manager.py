@@ -9,9 +9,8 @@ from core.utils.screenshot_logger import debug_screenshot
 
 
 class WarmupManager:
-    def __init__(self, profile_dir: str, warmup_sites: list[str] = None, num_actions_per_site: int = 4,
+    def __init__(self, warmup_sites: list[str] = None, num_actions_per_site: int = 4,
                  min_pause: float = config.PAUSES_ON_WARMUP * 0.5, max_pause: float = config.PAUSES_ON_WARMUP * 1.5):
-        self.profile_dir = profile_dir
         self.logger = get_logger(__name__)
         self.warmup_sites = warmup_sites or [
             "https://www.google.com", "https://yandex.ru", "https://www.wikipedia.org",
@@ -43,7 +42,7 @@ class WarmupManager:
                 await debug_screenshot(page=page, dir=__name__, name=page.url)
             except Exception as e:
                 await debug_screenshot(page=page,dir=__name__,name=f'EXCEPTION_{page.url}')
-                self.logger.debug(f"[W{worker_id}] Action on page {page.url} failed: {e}")
+                self.logger.debug(f"[W{worker_id}] Action on page {page.url} failed")
 
     async def _random_scroll(self, page):
         scroll_amount = random.randint(200, 800)
@@ -67,6 +66,7 @@ class WarmupManager:
 
     async def _rutube_banner(self, page, worker_id):
         self.logger.info(f"Starting rutube warmup for profile {worker_id}")
+        await page.goto('https://rutube.ru')
         try:
             await debug_screenshot(page=page, dir=__name__, name=page.url)
             await page.get_by_role("button", name="Закрыть", exact=True).click()
@@ -95,31 +95,24 @@ class WarmupManager:
             await self._human_like_pause()
         except Exception as err:
             await debug_screenshot(page=page, dir=__name__, name=f'EXCEPTION_{page.url}')
-            self.logger.warning(f'[{worker_id}] Error occurred while rutube warmup: {err}')
+            self.logger.warning(f'[{worker_id}] Error occurred while rutube warmup')
 
-    async def warmup_profile(self, context: BrowserContext, profile_id: str) -> BrowserContext:
+    async def warmup_profile(self, page, profile_id: str):
         self.logger.info(f"Starting extended warmup for profile {profile_id}")
-        profile_path = os.path.join(self.profile_dir, profile_id)
-        os.makedirs(profile_path, exist_ok=True)
-        page = await context.new_page()
         try:
             # Visit multiple sites for extended warmup
             num_sites = random.randint(config.WARMUP_MIN_SITES, config.WARMUP_MAX_SITES)  # More sites for longer warmup
             selected_sites = random.sample(self.warmup_sites, num_sites)
 
             for site in selected_sites:
-                self.logger.info(f"[Profile {profile_id}] Visiting {site}")
-                await page.goto(site, wait_until="domcontentloaded", timeout=20000)
+                self.logger.debug(f"[Profile {profile_id}] Visiting {site}")
+                await page.goto(site)
                 await debug_screenshot(page=page, dir=__name__, name=site)
                 await self._simulate_human_actions(page, profile_id)
-
                 await asyncio.sleep(random.uniform(1, 3))
-            await page.goto('rutube.ru')
+                self.logger.debug(f"[Profile {profile_id}] visited {site}")
             await self._rutube_banner(page, profile_id)
-            self.logger.info(f"Warmup completed for profile {profile_id}. Cookies saved.")
-
         except Exception as e:
-            self.logger.error(f"Warmup failed for {profile_id}: {e}")
-        finally:
-            await page.close()
-        return context
+            self.logger.debug(f'Error while warmup')
+            pass
+        self.logger.info(f"Warmup completed for profile {profile_id}. Cookies saved.")

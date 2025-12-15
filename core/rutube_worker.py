@@ -7,25 +7,30 @@ import time
 import threading
 import signal
 
+from patchright.async_api import Page
 from playwright.async_api import async_playwright, BrowserContext, Playwright
 from playwright._impl._errors import TargetClosedError, Error as PlaywrightError
 from playwright_stealth import Stealth
 
-from core.modules.fingerprint import generate_fingerprint
+from core.modules.context_manager import ContextManager
 from core.modules.proxy_main import ProxyManager
 from core.modules.warmup_manager import WarmupManager
 from core.utils.config import config
-from core.utils.get_videos import get_videos
+from core.utils.get_videos import get_videos, get_promo_videos
 from core.utils.logger import get_logger
 from core.utils.screenshot_logger import debug_screenshot
 
 class Rutube:
     def __init__(
             self,
-            profile_dir: str = config.PROFILES_DIR,
             num_contexts_per_thread: int = config.CONTEXTS_PER_THREAD,
             num_threads: int = config.THREADS
     ):
+        self.proxy_manager = ProxyManager()
+        self.proxies = []
+        self.proxy_cycle = None
+
+        self.profiles_dir = config.PROFILES_DIR
         self.logger = get_logger(__name__)
         self.count: int = 0
         self.num_contexts_per_thread = num_contexts_per_thread  # Контексты на поток
@@ -33,16 +38,13 @@ class Rutube:
 
         self.stop_event = threading.Event()  # Для graceful shutdown
         self.shutdown_initiated = False
-        self.warmup_manager = WarmupManager(profile_dir)
+        self.warmup_manager = WarmupManager(self.profiles_dir)
 
-        self.proxy_manager = ProxyManager()
-        self.proxies = []  # Загружаем прокси при инициализации
+        self.video_list_main: list[str] = get_videos()
+        self.video_list_promo: list[str] = get_promo_videos()
+        self.logger.debug(self.video_list_main)
 
-        self.proxy_cycle = itertools.cycle(self.proxies) if self.proxies else None  # Создаем цикличный итератор
-        self.profiles_dir = config.PROFILES_DIR
-
-        self.video_list: list[str] = get_videos()
-        self.logger.debug(self.video_list)
+        self.context_manager = ContextManager()
 
     def _clean_profile(self):
         import shutil, os
@@ -55,173 +57,128 @@ class Rutube:
         except Exception as e:
             self.logger.error(f"Failed to clear profiles directory: {e}")
 
-    async def _apply_advanced_stealth(self, context: BrowserContext, fp: dict):
-        """
-        Мягкий stealth, без вмешательства в WebGL/Canvas/Audio/Screen/Connection/UserAgentData.
-        Не ломает видеоплееры — только безопасные правки.
-        """
-        try:
-            language = fp.get('language', 'ru-RU')
-            languages = fp.get('languages') or [language, 'en-US']
-            platform = fp.get('platform', 'Win32')
-
-            hwc_base = int(fp.get('hardware_concurrency', 4))
-            hwc = max(1, hwc_base + random.choice([-1, 0, 1]))
-        except (TargetClosedError, PlaywrightError, Exception) as err:
-            self.logger.warning(f"Stealth init script failed or context closed: {err}")
-
-    async def _generate_context(
-            self,
-            playwright: Playwright,
-            worker_id: int,
-            context_id: int
-    ) -> BrowserContext:
-        """
-        Генерация контекста:
-        - headless=False (чтобы не ломать декодеры и рендеринг)
-        - НЕ отключаем GPU
-        - НЕ трогаем screen и webgl
-        - применяем _apply_advanced_stealth (мягкий)
-        """
-        fp = generate_fingerprint()  # остаётся использовать вашу функцию генерации отпечатков
-
-        profile_dir = os.path.join(self.profile_dir, f"thread_{worker_id}_context_{context_id}")
-        os.makedirs(self.profile_dir, exist_ok=True)
-
-        args = [
-            f"--window-size={fp['viewport_width']},{fp['viewport_height']}",
-            "--disable-blink-features=AutomationControlled",
-            "--disable-features=IsolateOrigins,site-per-process",
-            f"--lang={fp['language']}",
-            "--disable-dev-shm-usage",
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-        ]
-        proxy = next(self.proxy_cycle) if self.proxy_cycle else None
-        self.logger.info(f'starting context [T{worker_id}-C{context_id}] with proxy: {proxy}')
-        try:
-            context = await playwright.chromium.launch_persistent_context(
-                user_data_dir=profile_dir,
-                executable_path=str(config.CHROME),
-                headless=True if config.HEADLESS == 'True' else False,
-                viewport={"width": fp["viewport_width"], "height": fp["viewport_height"]},
-                user_agent=fp["user_agent"],
-                locale=fp["language"],
-                timezone_id=fp.get("timezone", None),
-                args=args,
-                ignore_https_errors=True,
-                java_script_enabled=True,
-                bypass_csp=False,
-                proxy=proxy
-            )
-            if proxy:
-                self.logger.info(f"[W{worker_id}] Используется прокси: {proxy['server']}")
-            await self._apply_advanced_stealth(context, fp)
-            try:
-                await self.warmup_manager.warmup_profile(context, f"{worker_id}-{context_id}")
-            except Exception as err:
-                self.logger.warning(err)
-            return context
-        except Exception as err:
-            self.logger.error(f"Failed to create context: {err}")
-            raise err
-
     async def _watch_video(self, page, url: str, worker_id: str):
         """Просмотр видео с проверкой прогресса (адаптировано под прямой video-элемент Rutube)"""
+        self.proxies = await self.proxy_manager.get_proxies()
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            self.logger.debug(f"[W{worker_id}] 👤 Имитирую поведение пользователя...")
-            await asyncio.sleep(random.uniform(0.2, 1.5))
-            print(f'starting watch {url}')
-            for _ in range(3):
-                html = await page.content()
-                if "video" in html.lower():
-                    break
-                await asyncio.sleep(1)
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            self.logger.debug(f"[W{worker_id}] 👤 Имитирую поведение пользователя: {url}")
+            await asyncio.sleep(random.uniform(0.2, 4))
+            await page.wait_for_selector("video", timeout=5000)
 
             await debug_screenshot(page=page, dir=__name__, name=f"video_loaded_{worker_id}")
-
-            # page.on("console", lambda msg: self.logger.debug(f"PAGE LOG: {msg.text}"))
-            # page.on("pageerror", lambda err: self.logger.error(f"PAGE ERROR: {err}"))
-
-            duration_el = await page.query_selector(".time-block-module__duration___RQctT")
-            duration: float = 40
 
             for _ in range(random.randint(2, 5)):
                 try:
                     scroll_amount = random.randint(150, 900)
                     await page.evaluate(f"window.scrollBy(0, {scroll_amount})")
-                    await asyncio.sleep(random.uniform(0.2, 2.5))
+                    await asyncio.sleep(random.uniform(0.1, 3))
                     await page.evaluate("window.scrollTo(0, 0)")
-                    await asyncio.sleep(random.uniform(0.2, 2.5))
+                    await asyncio.sleep(random.uniform(0.1, 3))
                     await page.get_by_role("button", name="Закрыть", exact=True).click()
 
                 except (TargetClosedError, PlaywrightError) as err:
                     self.logger.debug(f"[W{worker_id}] {err}")
 
             await debug_screenshot(page=page, dir=__name__, name=f"debug_{worker_id}")
-
-            try:
-                duration = float(await duration_el.text_content() if duration_el else None)
-                await debug_screenshot(page=page, dir=__name__, name=f"debug_{worker_id}")
-            except Exception as e:
-                await debug_screenshot(page=page, dir=__name__, name=f"EXCEPTION_{worker_id}")
-
             watch_duration = random.uniform(
-                duration * config.WATCH_DURATION_MIN,
-                duration * config.WATCH_DURATION_MAX
+                config.WATCH_DURATION_MIN,
+                config.WATCH_DURATION_MAX
             )
+            self.logger.debug(f'WATCH_DURATION FOR VIDEO {url} == {watch_duration}')
             await asyncio.sleep(watch_duration)
 
-            summary_time = await page.query_selector(".time-block-module__currentTime___Fo3jS")
-            if duration - summary_time > 20:
-                self.logger.debug(f"[W{worker_id}] Video playback confirmed ({summary_time:.1f}s)")
-                return True
-            else:
-                self.logger.debug(
-                    f"[W{worker_id}] Video failed to play properly (progress: {summary_time:.1f}s)")
-                return False
-        except (TargetClosedError, PlaywrightError):
-            return False
+            return True
+        except (TargetClosedError, PlaywrightError) as e:
+            self.logger.debug(f'[ERROR] Error while watching video: {e}')
 
     async def _context_task(self, playwright: Playwright, thread_id: int, context_id: int):
-        """Задача для одного контекста: warmup + цикл просмотров с перебором видео"""
-        context = await self._generate_context(playwright, thread_id, context_id)
-        self.logger.debug(f'Starting task [T{thread_id}-C{context_id}]')
-        page = await context.new_page()
+        max_restarts = 3
+        restarts = 0
+        context_expired = False
         try:
-            video_index = 0
             while not self.stop_event.is_set():
-                try:
-                    video_url = self.video_list[video_index]
-                    video_index = (video_index + 1) % len(self.video_list)
-                    if await self._watch_video(page, video_url, f"T{thread_id}-C{context_id}"):
-                        self.count += 1
-                    # await page.goto('rutube.ru')
-                    # await asyncio.sleep(random.uniform(1, 4))
-                except Exception as e:
-                    self.logger.error(f"[T{thread_id}-C{context_id}] Error: {e}")
-        finally:
-            try:
+                context: BrowserContext = await self.context_manager.get_context(
+                    playwright, thread_id, context_id, self.proxy_manager
+                )
+                lifetime_limit = config.CONTEXT_LIFETIME * random.uniform(0.5, 1.2)
+                started_at = time.monotonic()
+                self.logger.info(
+                    f"[T{thread_id}-C{context_id}] Context started at {started_at}"
+                )
+                page: Page = await context.new_page()
+                index_main = 0
+                index_promo = 0
+
+                while not self.stop_event.is_set():
+                    if time.monotonic() - started_at > lifetime_limit:
+                        context_expired = True
+                        self.logger.info(
+                            f"[T{thread_id}-C{context_id}] Context lifetime expired"
+                        )
+                        break
+                    if self.video_list_promo and random.random() > config.MAIN_LIST_PROBABILITY:
+                        target_url = self.video_list_promo[index_promo]
+                        index_promo = (index_promo + 1) % len(self.video_list_promo)
+                    else:
+                        target_url = self.video_list_main[index_main]
+                        index_main = (index_main + 1) % len(self.video_list_main)
+                    try:
+                        ok = await self._watch_video(
+                            page, target_url, f"T{thread_id}-C{context_id}"
+                        )
+                        if ok:
+                            self.count += 1
+                    except TargetClosedError:
+                        self.logger.warning(
+                            f"[T{thread_id}-C{context_id}] Target closed — killing context"
+                        )
+                        raise
+                    except PlaywrightError as e:
+                        self.logger.warning(
+                            f"[T{thread_id}-C{context_id}] Page error: {e}"
+                        )
+                        await asyncio.sleep(1)
+                    self.logger.debug('Context finished work')
+                    await asyncio.sleep(random.uniform(1, 3))
+                if context_expired:
+                    await page.close()
+                    await context.close()
+                    continue
+                await page.close()
                 await context.close()
-            except:
-                pass
-            self.logger.info(f"[T{thread_id}-C{context_id}] Context closed")
+                self.logger.info('Context closed')
+
+        except asyncio.CancelledError:
+            return
+
+        except TargetClosedError as err:
+            restarts += 1
+            self.logger.warning(
+                f"[T{thread_id}-C{context_id}] Context died: {err}\n\n Restart {restarts}"
+            )
+            await asyncio.sleep(2)
+
+        except Exception as e:
+            restarts += 1
+            self.logger.error(
+                f"[T{thread_id}-C{context_id}] Fatal context error: {e}"
+            )
+            await asyncio.sleep(3)
+        self.logger.info(
+            f"[T{thread_id}-C{context_id}] Context task finished"
+        )
 
     async def _thread_main(self, thread_id: int):
         """Асинхронный main для потока: запускает несколько контекстов параллельно"""
         if config.PRO or not config.PRO:
-            try:
-                async with Stealth().use_async(async_playwright()) as pw:
-                    context_tasks = []
-                    for context_id in range(self.num_contexts_per_thread):
-                        task = asyncio.create_task(self._context_task(pw, thread_id, context_id))
-                        context_tasks.append(task)
-                        await asyncio.sleep(random.uniform(1, 8))  # Старт с задержкой для снижения всплесков
-                    await asyncio.gather(*context_tasks, return_exceptions=True)
-            except Exception as err:
-                self.logger.error(err)
-                raise
+            async with Stealth().use_async(async_playwright()) as pw:
+                context_tasks = []
+                for context_id in range(self.num_contexts_per_thread):
+                    task = asyncio.create_task(self._context_task(pw, thread_id, context_id))
+                    context_tasks.append(task)
+                    await asyncio.sleep(random.uniform(1, 8))  # Старт с задержкой для снижения всплесков
+                await asyncio.gather(*context_tasks, return_exceptions=True)
         # else:
         #     async with Stealth().use_async(async_playwright()) as pw:
         #         context_tasks = []
@@ -247,28 +204,39 @@ class Rutube:
 
     def start(self):
         """Запуск многопоточной системы"""
-        #asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-        self.proxies = asyncio.run(self.proxy_manager.get_proxies())
         try:
+            self.proxy_cycle = itertools.cycle(self.proxies)
             self._clean_profile()
-        except:
-            pass
-        def signal_handler(sig, frame):
-            # print(f'Watched video count: {self.count}')
-            self.logger.info("Signal received, initiating shutdown")
-            self.stop_event.set()
-            self.shutdown_initiated = True
 
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
+            def signal_handler(sig, frame):
+                self.logger.info(f"Signal {sig} received, shutting down...")
+                self.stop_event.set()
+                self.shutdown_initiated = True
 
-        self.logger.info(
-            f"Starting Rutube bot with {self.num_threads} threads, {self.num_contexts_per_thread} contexts each")
+            signal.signal(signal.SIGINT, signal_handler)
+            signal.signal(signal.SIGTERM, signal_handler)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.num_threads) as executor:
-            futures = []
-            for thread_id in range(self.num_threads):
-                future = executor.submit(self._run_thread, thread_id)
-                futures.append(future)
-                time.sleep(random.uniform(2, 5))
-            concurrent.futures.wait(futures, return_when=concurrent.futures.ALL_COMPLETED)
+            self.logger.info(
+                f"Starting with {self.num_threads} threads, "
+                f"{self.num_contexts_per_thread} contexts each"
+            )
+            # ... (начало функции без изменений) ...
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+                futures = []
+                for thread_id in range(self.num_threads):
+                    future = executor.submit(self._run_thread, thread_id)
+                    futures.append(future)
+                    time.sleep(random.uniform(1, 3))
+
+                try:
+                    concurrent.futures.wait(futures, return_when=concurrent.futures.ALL_COMPLETED)
+                except KeyboardInterrupt:
+                    self.logger.info("Keyboard interrupt, stopping threads...")
+                    self.stop_event.set()
+                    # Даем время на graceful shutdown
+                    executor.shutdown(wait=True)
+
+        except Exception as e:
+            self.logger.error(f"Start failed: {e}")
+        finally:
+            self.logger.info(f"Bot stopped. Total views: {self.count}")
