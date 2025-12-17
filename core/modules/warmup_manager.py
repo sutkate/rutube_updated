@@ -9,7 +9,7 @@ from core.utils.screenshot_logger import debug_screenshot
 
 
 class WarmupManager:
-    def __init__(self, warmup_sites: list[str] = None, num_actions_per_site: int = 4,
+    def __init__(self, warmup_sites: list[str] = None, num_actions_per_site: int = 2,
                  min_pause: float = config.PAUSES_ON_WARMUP * 0.5, max_pause: float = config.PAUSES_ON_WARMUP * 1.5):
         self.logger = get_logger(__name__)
         self.warmup_sites = warmup_sites or [
@@ -109,7 +109,6 @@ class WarmupManager:
                 await page.goto(site)
                 await debug_screenshot(page=page, dir=__name__, name=site)
                 await self._simulate_human_actions(page, profile_id)
-                await asyncio.sleep(random.uniform(1, 3))
                 self.logger.debug(f"[Profile {profile_id}] visited {site}")
             await self._rutube_banner(page, profile_id)
         except Exception as e:

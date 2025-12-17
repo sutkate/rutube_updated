@@ -5,12 +5,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Config(BaseSettings):
     model_config = SettingsConfigDict(env_file='.settings', env_file_encoding='utf-8')
 
-
-
-    DEBUG: bool = False
+    DEBUG: bool = True
     DEBUG_SCREENSHOTS: bool = False
-    THREADS: int = 5
-    CONTEXTS_PER_THREAD: int = 5
+    THREADS: int = 6
+    CONTEXTS_PER_THREAD: int = 4
 
     PROXY_PATH: str = 'proxies.txt'
     VIDEO_PATH: str = 'videos.txt'
@@ -20,14 +18,14 @@ class Config(BaseSettings):
 
     HEADLESS: str = 'True'
 
-    PRO: bool = False
+    PRO: bool = True
 
     CONTEXT_LIFETIME: float = 10 * 60
     WARMUP_MAX_SITES: int = 3
     WARMUP_MIN_SITES: int = 1
-    PAUSES_ON_WARMUP: float = 4.0
+    PAUSES_ON_WARMUP: float = 1.0
 
-    WATCH_DURATION_MIN: float = 4
-    WATCH_DURATION_MAX: float = 15
+    WATCH_DURATION_MIN: float = 10
+    WATCH_DURATION_MAX: float = 50
 
 config = Config()

@@ -6,6 +6,7 @@ import random
 import time
 import threading
 import signal
+from asyncio import timeout
 
 from patchright.async_api import Page
 from playwright.async_api import async_playwright, BrowserContext, Playwright
@@ -60,91 +61,70 @@ class Rutube:
     async def _watch_video(self, page, url: str, worker_id: str):
         """Просмотр видео с проверкой прогресса (адаптировано под прямой video-элемент Rutube)"""
         self.proxies = await self.proxy_manager.get_proxies()
+        started_at = time.monotonic()
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            self.logger.debug(f"[W{worker_id}] 👤 Имитирую поведение пользователя: {url}")
-            await asyncio.sleep(random.uniform(0.2, 4))
-            await page.wait_for_selector("video", timeout=5000)
-
+            await page.goto(url, wait_until="domcontentloaded", timeout=10000)
+            self.logger.debug(f"[{worker_id}] 👤 Имитирую поведение пользователя: {url}")
             await debug_screenshot(page=page, dir=__name__, name=f"video_loaded_{worker_id}")
-
-            for _ in range(random.randint(2, 5)):
+            for _ in range(random.randint(2, 8)):
                 try:
-                    scroll_amount = random.randint(150, 900)
+                    scroll_amount = random.randint(150, 1000)
                     await page.evaluate(f"window.scrollBy(0, {scroll_amount})")
-                    await asyncio.sleep(random.uniform(0.1, 3))
+                    await asyncio.sleep(random.uniform(0.1, 2))
                     await page.evaluate("window.scrollTo(0, 0)")
-                    await asyncio.sleep(random.uniform(0.1, 3))
-                    await page.get_by_role("button", name="Закрыть", exact=True).click()
-
+                    await asyncio.sleep(random.uniform(0.1, 2))
+                    await page.locator("video").focus()
+                    await page.keyboard.press("ArrowRight")
+                    await page.get_by_role("button", name="Закрыть", exact=True).click(timeout=2000)
                 except (TargetClosedError, PlaywrightError) as err:
-                    self.logger.debug(f"[W{worker_id}] {err}")
+                    pass
 
             await debug_screenshot(page=page, dir=__name__, name=f"debug_{worker_id}")
-            watch_duration = random.uniform(
-                config.WATCH_DURATION_MIN,
-                config.WATCH_DURATION_MAX
-            )
-            self.logger.debug(f'WATCH_DURATION FOR VIDEO {url} == {watch_duration}')
-            await asyncio.sleep(watch_duration)
-
+            await asyncio.sleep(random.uniform(config.WATCH_DURATION_MIN, config.WATCH_DURATION_MAX))
+            ended_at = time.monotonic()
+            self.logger.debug(f'[{worker_id}] WATCH_DURATION FOR VIDEO {url} == {ended_at - started_at}')
             return True
         except (TargetClosedError, PlaywrightError) as e:
-            self.logger.debug(f'[ERROR] Error while watching video: {e}')
+            self.logger.warning(f'Error while watching video: {e}')
+            raise
 
     async def _context_task(self, playwright: Playwright, thread_id: int, context_id: int):
-        max_restarts = 3
-        restarts = 0
-        context_expired = False
         try:
+            index_main = 0
+            index_promo = 0
             while not self.stop_event.is_set():
                 context: BrowserContext = await self.context_manager.get_context(
                     playwright, thread_id, context_id, self.proxy_manager
                 )
-                lifetime_limit = config.CONTEXT_LIFETIME * random.uniform(0.5, 1.2)
                 started_at = time.monotonic()
                 self.logger.info(
                     f"[T{thread_id}-C{context_id}] Context started at {started_at}"
                 )
                 page: Page = await context.new_page()
-                index_main = 0
-                index_promo = 0
 
-                while not self.stop_event.is_set():
-                    if time.monotonic() - started_at > lifetime_limit:
-                        context_expired = True
-                        self.logger.info(
-                            f"[T{thread_id}-C{context_id}] Context lifetime expired"
-                        )
-                        break
-                    if self.video_list_promo and random.random() > config.MAIN_LIST_PROBABILITY:
-                        target_url = self.video_list_promo[index_promo]
-                        index_promo = (index_promo + 1) % len(self.video_list_promo)
-                    else:
-                        target_url = self.video_list_main[index_main]
-                        index_main = (index_main + 1) % len(self.video_list_main)
-                    try:
-                        ok = await self._watch_video(
-                            page, target_url, f"T{thread_id}-C{context_id}"
-                        )
-                        if ok:
-                            self.count += 1
-                    except TargetClosedError:
-                        self.logger.warning(
-                            f"[T{thread_id}-C{context_id}] Target closed — killing context"
-                        )
-                        raise
-                    except PlaywrightError as e:
-                        self.logger.warning(
-                            f"[T{thread_id}-C{context_id}] Page error: {e}"
-                        )
-                        await asyncio.sleep(1)
-                    self.logger.debug('Context finished work')
-                    await asyncio.sleep(random.uniform(1, 3))
-                if context_expired:
-                    await page.close()
-                    await context.close()
-                    continue
+                if self.video_list_promo and random.random() > config.MAIN_LIST_PROBABILITY:
+                    target_url = self.video_list_promo[index_promo]
+                    index_promo = (index_promo + 1) % len(self.video_list_promo)
+                else:
+                    target_url = self.video_list_main[index_main]
+                    index_main = (index_main + 1) % len(self.video_list_main)
+                try:
+                    ok = await self._watch_video(
+                        page, target_url, f"T{thread_id}-C{context_id}"
+                    )
+                    if ok:
+                        self.count += 1
+                except TargetClosedError:
+                    self.logger.warning(
+                        f"[T{thread_id}-C{context_id}] Target closed — killing context"
+                    )
+                    raise
+                except PlaywrightError as e:
+                    self.logger.warning(
+                        f"[T{thread_id}-C{context_id}] Page error: {e}"
+                    )
+                    await asyncio.sleep(1)
+                self.logger.debug(f'[T{thread_id}-C{context_id}] Context finished work')
                 await page.close()
                 await context.close()
                 self.logger.info('Context closed')
@@ -153,14 +133,12 @@ class Rutube:
             return
 
         except TargetClosedError as err:
-            restarts += 1
             self.logger.warning(
-                f"[T{thread_id}-C{context_id}] Context died: {err}\n\n Restart {restarts}"
+                f"[T{thread_id}-C{context_id}] Context died: {err}"
             )
             await asyncio.sleep(2)
 
         except Exception as e:
-            restarts += 1
             self.logger.error(
                 f"[T{thread_id}-C{context_id}] Fatal context error: {e}"
             )
