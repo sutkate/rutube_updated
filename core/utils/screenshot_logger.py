@@ -13,15 +13,17 @@ logger = get_logger(logger_name='screenshot_debug')
 
 
 async def debug_screenshot(page, dir, name) -> None:
-    if config.DEBUG:
+    if config.DEBUG_SCREENSHOTS:
         if name.startswith(('http://', 'https://')):
             parsed = urlparse(name)
             safe_name = parsed.netloc.replace('.', '_')
         else:
             safe_name = name
         safe_name = re.sub(r'[<>:"/\\|?*]', '_', safe_name)
+
         ss_path = Path(f"logs/screenshots")
         ss_path.mkdir(exist_ok=True)
+
         ss_path = ss_path / dir
         ss_path.mkdir(exist_ok=True)
 
