@@ -147,91 +147,182 @@ class Rutube:
 
             await asyncio.sleep(1)
 
+            # Ждем загрузки видео
             for _ in range(3):
                 html = await page.content()
                 if "video" in html.lower():
                     break
                 await asyncio.sleep(1)
+            else:
+                self.logger.warning(f"[W{worker_id}] Видео не найдено на странице")
+                return False
 
             await debug_screenshot(page=page, dir=__name__, name=f"video_loaded_{worker_id}")
 
-            # Логирование
-            # page.on("console", lambda msg: self.logger.debug(f"PAGE LOG: {msg.text}"))
+            # Логирование ошибок страницы
             page.on("pageerror", lambda err: self.logger.error(f"PAGE ERROR: {err}"))
 
+            # Получаем длительность видео
             duration_el = await page.query_selector(".time-block-module__duration___RQctT")
             duration: float = 120
-            # Случайный скроллинг с человеческими паузами
-            for _ in range(random.randint(2, 5)):
-                try:
-                    scroll_amount = random.randint(150, 900)
-                    await page.evaluate(f"window.scrollBy(0, {scroll_amount})")
-                    await asyncio.sleep(random.uniform(0.8, 2.5))
-                    await page.evaluate("window.scrollTo(0, 0)")
-
-                    await asyncio.sleep(random.uniform(0.8, 2.5))
-                    await page.get_by_role("button", name="Закрыть", exact=True).click()
-
-                except (TargetClosedError, PlaywrightError) as err:
-                    self.logger.debug(f"[W{worker_id}] {err}")
-
-            await debug_screenshot(page=page, dir=__name__, name=f"debug_{worker_id}")
-            await asyncio.sleep(random.uniform(2, 4))  # Начальная пауза для старта
-
 
             try:
-                duration = float(await duration_el.text_content() if duration_el else None)
-                await debug_screenshot(page=page, dir=__name__, name=f"debug_{worker_id}")
+                if duration_el:
+                    duration_text = await duration_el.text_content()
+                    if duration_text:
+                        # Конвертируем время в секунды (формат "mm:ss" или "hh:mm:ss")
+                        time_parts = duration_text.strip().split(":")
+                        if len(time_parts) == 3:  # hh:mm:ss
+                            hours, minutes, seconds = time_parts
+                            duration = int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+                        elif len(time_parts) == 2:  # mm:ss
+                            minutes, seconds = time_parts
+                            duration = int(minutes) * 60 + int(seconds)
             except Exception as e:
-                await debug_screenshot(page=page, dir=__name__, name=f"EXCEPTION_{worker_id}")
-                pass
-            watch_duration = random.uniform(duration * 0.5, duration)
+                self.logger.debug(f"[W{worker_id}] Не удалось распарсить длительность: {e}")
+
+            # Случайный скроллинг с человеческими паузами
+            for _ in range(random.randint(25, 50)):
+                await page.reload()
+                for _ in range(random.randint(2, 5)):
+                    try:
+                        scroll_amount = random.randint(150, 900)
+                        await page.evaluate(f"window.scrollBy(0, {scroll_amount})")
+                        await asyncio.sleep(random.uniform(0.8, 2.5))
+                        await page.evaluate("window.scrollTo(0, 0)")
+                        await asyncio.sleep(random.uniform(0.8, 2.5))
+
+                        # Пробуем закрыть рекламу, если есть
+                        try:
+                            close_btn = page.get_by_role("button", name="Закрыть", exact=True)
+                            if await close_btn.count() > 0:
+                                await close_btn.first.click()
+                        except:
+                            pass
+
+                    except (TargetClosedError, PlaywrightError) as err:
+                        self.logger.debug(f"[W{worker_id}] Ошибка при скроллинге: {err}")
+                        # Не прерываем выполнение, продолжаем просмотр
+
+            await debug_screenshot(page=page, dir=__name__, name=f"before_play_{worker_id}")
+
+            # Начальная пауза перед просмотром
+            await asyncio.sleep(random.uniform(2, 4))
+
+            # Время просмотра (50-100% от длительности видео)
+            watch_duration = random.uniform(duration * 0.5, min(duration, 300))  # Ограничиваем максимум 5 минутами
+            self.logger.info(f"[W{worker_id}] Буду смотреть {watch_duration:.1f} секунд из {duration:.1f}")
+
             await asyncio.sleep(watch_duration)
 
-            summary_time = await page.query_selector(".time-block-module__currentTime___Fo3jS")
+            # Проверяем прогресс просмотра
+            try:
+                summary_time_el = await page.query_selector(".time-block-module__currentTime___Fo3jS")
+                if summary_time_el:
+                    summary_time_text = await summary_time_el.text_content()
+                    if summary_time_text:
+                        # Конвертируем текущее время в секунды
+                        time_parts = summary_time_text.strip().split(":")
+                        if len(time_parts) == 3:
+                            hours, minutes, seconds = time_parts
+                            summary_time = int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+                        elif len(time_parts) == 2:
+                            minutes, seconds = time_parts
+                            summary_time = int(minutes) * 60 + int(seconds)
+                        else:
+                            summary_time = watch_duration
 
-
-            if duration - summary_time > 20:
-                self.logger.info(f"[W{worker_id}] Video playback confirmed ({summary_time:.1f}s)")
+                        if summary_time >= duration - 20 or summary_time >= watch_duration * 0.8:
+                            self.logger.info(f"[W{worker_id}] Video playback confirmed ({summary_time:.1f}s)")
+                            return True
+                        else:
+                            self.logger.warning(
+                                f"[W{worker_id}] Video failed to play properly (progress: {summary_time:.1f}s)")
+                            return False
+            except Exception as e:
+                self.logger.debug(f"[W{worker_id}] Не удалось получить прогресс: {e}")
+                # Если не смогли получить прогресс, считаем что просмотр успешен
                 return True
-            else:
-                self.logger.warning(
-                    f"[W{worker_id}] Video failed to play properly (progress: {summary_time:.1f}s)")
-                return False
-        except (TargetClosedError, PlaywrightError):
+
+            return True
+
+        except (TargetClosedError, PlaywrightError) as e:
+            self.logger.error(f"[W{worker_id}] Ошибка браузера: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"[W{worker_id}] Неожиданная ошибка: {e}")
             return False
 
-    async def _context_task(self, playwright: Playwright, thread_id: int, context_id: int):
+    async def _context_task(self, playwright: Playwright, thread_id: int, context_id: str):
         """Задача для одного контекста: warmup + цикл просмотров с перебором видео"""
-        context = await self._generate_context(playwright, thread_id, context_id)
+        context = None
 
         try:
+            context = await self._generate_context(playwright, thread_id, context_id)
             video_index = 0
+            consecutive_failures = 0
+
             while not self.stop_event.is_set():
-                page = await context.new_page()
+                page = None
                 try:
-                    # Берём URL по кругу
+                    # Создаем новую страницу для каждого видео
+                    page = await context.new_page()
+
+                    # Настройка таймаутов
+                    page.set_default_timeout(30000)
+
+                    # Берем URL по кругу
                     video_url = self.video_list[video_index]
                     video_index = (video_index + 1) % len(self.video_list)
+
+                    self.logger.info(f"[T{thread_id}-C{context_id}] Начинаю просмотр видео {video_index}: {video_url}")
+
                     # Основной просмотр
-                    await self._watch_video(page, video_url, f"{thread_id}-{context_id}")
+                    success = await self._watch_video(page, video_url, f"{thread_id}-{context_id}")
+
+                    if success:
+                        consecutive_failures = 0
+                        self.logger.info(f"[T{thread_id}-C{context_id}] Видео просмотрено успешно")
+                    else:
+                        consecutive_failures += 1
+                        self.logger.warning(
+                            f"[T{thread_id}-C{context_id}] Ошибка просмотра видео (попытка {consecutive_failures})")
+
+                    # Если много ошибок подряд - небольшая пауза
+                    if consecutive_failures >= 3:
+                        self.logger.warning(f"[T{thread_id}-C{context_id}] 3 ошибки подряд, делаю паузу")
+                        await asyncio.sleep(random.uniform(30, 60))
+                        consecutive_failures = 0
+
                     # Пауза перед следующим видео
-                    await asyncio.sleep(random.uniform(40, 160))
+                    pause_time = random.uniform(40, 160)
+                    self.logger.info(f"[T{thread_id}-C{context_id}] Пауза {pause_time:.1f} сек до следующего видео")
+                    await asyncio.sleep(pause_time)
+
                 except Exception as e:
-                    self.logger.error(f"[T{thread_id}-C{context_id}] Error: {e}")
+                    self.logger.error(f"[T{thread_id}-C{context_id}] Ошибка в цикле просмотра: {e}")
+                    consecutive_failures += 1
+                    await asyncio.sleep(random.uniform(10, 30))  # Короткая пауза при ошибке
+
                 finally:
-                    try:
-                        if not page.is_closed():
+                    # Всегда закрываем страницу после просмотра
+                    if page and not page.is_closed():
+                        try:
                             await page.close()
-                    except:
-                        pass
+                        except Exception as e:
+                            self.logger.debug(f"[T{thread_id}-C{context_id}] Ошибка при закрытии страницы: {e}")
+
+        except Exception as e:
+            self.logger.error(f"[T{thread_id}-C{context_id}] Критическая ошибка контекста: {e}")
 
         finally:
-            try:
-                await context.close()
-            except:
-                pass
-            self.logger.info(f"[T{thread_id}-C{context_id}] Context closed")
+            # Закрываем контекст только при завершении задачи
+            if context:
+                try:
+                    await context.close()
+                    self.logger.info(f"[T{thread_id}-C{context_id}] Контекст закрыт")
+                except Exception as e:
+                    self.logger.debug(f"[T{thread_id}-C{context_id}] Ошибка при закрытии контекста: {e}")
 
     async def _thread_main(self, thread_id: int):
         """Асинхронный main для потока: запускает несколько контекстов параллельно"""
