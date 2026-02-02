@@ -6,9 +6,9 @@ param(
 )
 
 # Создаем директории на другом диске
-$tempDir = "$DriveLetter`:\Temp\NuitkaBuild"
-$cacheDir = "$DriveLetter`:\Cache\Nuitka"
-$buildDir = "$DriveLetter`:\Build"
+$tempDir = "$DriveLetter`:\src\build\Temp\NuitkaBuild"
+$cacheDir = "$DriveLetter`:\src\build\Cache\Nuitka"
+$buildDir = "$DriveLetter`:\src\build\Build"
 
 # Создаем директории если их нет
 New-Item -ItemType Directory -Force -Path $tempDir

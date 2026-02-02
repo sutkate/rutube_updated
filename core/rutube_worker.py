@@ -23,7 +23,7 @@ from core.utils.screenshot_logger import debug_screenshot
 class Rutube:
     def __init__(
             self,
-            profile_dir: str,
+            profile_dir: str = config.PROFILES_DIR,
             num_contexts_per_thread: int = config.CONTEXTS_PER_THREAD,
             num_threads: int = config.THREADS
     ):
@@ -33,7 +33,7 @@ class Rutube:
         self.num_threads = num_threads  # Количество потоков
         self.stop_event = threading.Event()  # Для graceful shutdown
         self.shutdown_initiated = False
-        self.warmup_manager = WarmupManager(self.profile_dir)
+        self.warmup_manager = WarmupManager()
         self.proxy_manager = ProxyManager()
         self.proxies = []  # Загружаем прокси при инициализации
         self.proxy_cycle = itertools.cycle(self.proxies) if self.proxies else None  # Создаем цикличный итератор
@@ -144,10 +144,6 @@ class Rutube:
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
             self.logger.info(f"[W{worker_id}] 👤 Имитирую поведение пользователя...")
-
-            await asyncio.sleep(1)
-
-            # Ждем загрузки видео
             for _ in range(3):
                 html = await page.content()
                 if "video" in html.lower():
@@ -158,11 +154,8 @@ class Rutube:
                 return False
 
             await debug_screenshot(page=page, dir=__name__, name=f"video_loaded_{worker_id}")
-
-            # Логирование ошибок страницы
             page.on("pageerror", lambda err: self.logger.error(f"PAGE ERROR: {err}"))
 
-            # Получаем длительность видео
             duration_el = await page.query_selector(".time-block-module__duration___RQctT")
             duration: float = 120
 
@@ -170,7 +163,6 @@ class Rutube:
                 if duration_el:
                     duration_text = await duration_el.text_content()
                     if duration_text:
-                        # Конвертируем время в секунды (формат "mm:ss" или "hh:mm:ss")
                         time_parts = duration_text.strip().split(":")
                         if len(time_parts) == 3:  # hh:mm:ss
                             hours, minutes, seconds = time_parts
@@ -181,10 +173,9 @@ class Rutube:
             except Exception as e:
                 self.logger.debug(f"[W{worker_id}] Не удалось распарсить длительность: {e}")
 
-            # Случайный скроллинг с человеческими паузами
-            for _ in range(random.randint(25, 50)):
+            for _ in range(random.randint(15, 50)):
                 await page.reload()
-                for _ in range(random.randint(2, 5)):
+                for _ in range(random.randint(2, 8)):
                     try:
                         scroll_amount = random.randint(150, 900)
                         await page.evaluate(f"window.scrollBy(0, {scroll_amount})")
@@ -206,22 +197,16 @@ class Rutube:
 
             await debug_screenshot(page=page, dir=__name__, name=f"before_play_{worker_id}")
 
-            # Начальная пауза перед просмотром
-            await asyncio.sleep(random.uniform(2, 4))
-
-            # Время просмотра (50-100% от длительности видео)
             watch_duration = random.uniform(duration * 0.5, min(duration, 300))  # Ограничиваем максимум 5 минутами
             self.logger.info(f"[W{worker_id}] Буду смотреть {watch_duration:.1f} секунд из {duration:.1f}")
 
             await asyncio.sleep(watch_duration)
 
-            # Проверяем прогресс просмотра
             try:
                 summary_time_el = await page.query_selector(".time-block-module__currentTime___Fo3jS")
                 if summary_time_el:
                     summary_time_text = await summary_time_el.text_content()
                     if summary_time_text:
-                        # Конвертируем текущее время в секунды
                         time_parts = summary_time_text.strip().split(":")
                         if len(time_parts) == 3:
                             hours, minutes, seconds = time_parts
@@ -241,7 +226,6 @@ class Rutube:
                             return False
             except Exception as e:
                 self.logger.debug(f"[W{worker_id}] Не удалось получить прогресс: {e}")
-                # Если не смогли получить прогресс, считаем что просмотр успешен
                 return True
 
             return True
@@ -265,19 +249,14 @@ class Rutube:
             while not self.stop_event.is_set():
                 page = None
                 try:
-                    # Создаем новую страницу для каждого видео
                     page = await context.new_page()
-
-                    # Настройка таймаутов
                     page.set_default_timeout(30000)
 
-                    # Берем URL по кругу
                     video_url = self.video_list[video_index]
                     video_index = (video_index + 1) % len(self.video_list)
 
                     self.logger.info(f"[T{thread_id}-C{context_id}] Начинаю просмотр видео {video_index}: {video_url}")
 
-                    # Основной просмотр
                     success = await self._watch_video(page, video_url, f"{thread_id}-{context_id}")
 
                     if success:
@@ -288,13 +267,11 @@ class Rutube:
                         self.logger.warning(
                             f"[T{thread_id}-C{context_id}] Ошибка просмотра видео (попытка {consecutive_failures})")
 
-                    # Если много ошибок подряд - небольшая пауза
                     if consecutive_failures >= 3:
                         self.logger.warning(f"[T{thread_id}-C{context_id}] 3 ошибки подряд, делаю паузу")
                         await asyncio.sleep(random.uniform(30, 60))
                         consecutive_failures = 0
 
-                    # Пауза перед следующим видео
                     pause_time = random.uniform(40, 160)
                     self.logger.info(f"[T{thread_id}-C{context_id}] Пауза {pause_time:.1f} сек до следующего видео")
                     await asyncio.sleep(pause_time)
@@ -302,10 +279,9 @@ class Rutube:
                 except Exception as e:
                     self.logger.error(f"[T{thread_id}-C{context_id}] Ошибка в цикле просмотра: {e}")
                     consecutive_failures += 1
-                    await asyncio.sleep(random.uniform(10, 30))  # Короткая пауза при ошибке
+                    await asyncio.sleep(random.uniform(10, 30))
 
                 finally:
-                    # Всегда закрываем страницу после просмотра
                     if page and not page.is_closed():
                         try:
                             await page.close()
@@ -316,7 +292,6 @@ class Rutube:
             self.logger.error(f"[T{thread_id}-C{context_id}] Критическая ошибка контекста: {e}")
 
         finally:
-            # Закрываем контекст только при завершении задачи
             if context:
                 try:
                     await context.close()
