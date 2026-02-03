@@ -37,14 +37,16 @@ python -m nuitka `
   --standalone `
   --follow-imports `
   --lto=no `
-  --jobs=2 `
-  --low-memory `
+  --jobs=12 `
+  --enable-plugin=pylint-warnings `
   --include-package=playwright `
   --include-package=aiohttp `
   --output-dir=$buildDir `
   --output-filename=$OutputName `
   --remove-output `
   --assume-yes-for-downloads `
+  --show-progress `
+  --show-memory `
   $ScriptPath
 
 if ($LASTEXITCODE -eq 0) {
